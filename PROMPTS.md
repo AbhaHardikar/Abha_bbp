@@ -3,6 +3,7 @@
 ## Tools and model
 
 - AI tool: Copilot SDK in VS Code.
+- Model identifiers visible in the retained session metadata: Claude Sonnet 5.5, followed by GPT-6 Luna. Because earlier history was summarized and not every prompt retains model metadata, I cannot reliably attribute each prompt to one model.
 - Other tools used: local workspace file and shell tools, the integrated browser for local UI checks, and local Git commands. No external model API was used.
 
 ## User prompts, verbatim and in order
@@ -316,6 +317,84 @@ update endpoint and show the returned violations inline without a page reload. D
 the grid and the violation list consistent while a drag is in progress.
 ````
 
+### 22. End-to-end test request
+
+```
+test if it is working end to end
+```
+
+### 23. Drag issue report
+
+```
+the drad is not working
+```
+
+### 24. Local functionality question
+
+```
+is it working locally
+```
+
+### 25. Testing and submission question
+
+```
+okay now how do i test this ? and sumit this?
+```
+
+### 26. Local app next steps
+
+```
+okay opened now what to do ?
+```
+
+### 27. Simulator timing question
+
+```
+why so log?
+```
+
+### 28. Manual feed value question
+
+```
+ml/h what should this be set
+```
+
+### 29. Further testing question
+
+```
+okay applied now what else do i test
+```
+
+### 30. Controller save issue report
+
+```
+when i entre value in automatic controler i am not able to save check this
+```
+
+### 31. Hosted branch question
+
+```
+which branch was published to the host?
+```
+
+### 32. Main-branch deployment clarification
+
+```
+but i need to deploy main branch i have merged the develloop in main ]
+```
+
+### 33. README and PROMPTS requirements
+
+```
+now make sure the readme has all this- README.md with how to run it locally, the hosted URL, and three headings: How I split and
+evaluated the forecaster, Decisions and trade-offs (at least two, from backend, frontend or ML),
+How I would deploy, retrain and monitor this. Include the seed data and where the deliberate
+violations are.
+and prompts has - 5. PROMPTS.md if you used any AI tool: which tools and models; the prompts you gave them,
+verbatim and in order (a coding-agent session export is fine); what you changed in their output;
+what they got wrong. Using AI is never penalized. Leaving this out when AI was used is.
+```
+
 ## Changes made and issues caught
 
 - The scheduling backend saves operations and returns current rule violations; this was chosen after the user approved that behavior.
@@ -326,3 +405,11 @@ the grid and the violation list consistent while a drag is in progress.
 - E2 uses a fresh prediction five minutes ahead, matching the actuator lag. Missing or stale forecasts cause no action; pending commands, dwell, configured feed limits, and the existing API validation remain in force.
 - E3 keeps the committed schedule and violations unchanged during the drag preview. After the update endpoint returns, the UI replaces the operation and its related violations in memory; failures discard the preview and retain the saved state.
 - The application is deployed on the Render and Neon Free tiers at https://boston-bioprocess-demo.onrender.com. No paid services were selected. No recording has been created.
+
+## What the AI got wrong or needed to correct
+
+- An early E3 check used synthetic pointer events and was described too confidently as browser verification. A later real browser drag showed that the preview worked, but saving on the hosted service returned HTTP 401 until the evaluator write key was unlocked. Hosted editing must be tested with authorized writes; that test was not performed against the live database.
+- A shared browser page continued pointing to a local port after its temporary server had stopped. The resulting connection failures were not an application code defect; restarting the local server restored the page.
+- The first simulator implementation held the initial feed instead of following the source run before a command, and the first manual-command UI could anchor the apply delay to stale process time. Both were corrected after tests reproduced the issues, as detailed above.
+- The first controller-save diagnosis inferred that the comma in `10,2` made the number field invalid. A browser validity check confirmed that `10,2` is rejected while `10.2` is accepted, but the original failed save was not reproduced against the user's active app; treat the specific cause as likely, not conclusively established.
+- This document is based on the conversation text retained in this workspace. Earlier context was summarized, so it cannot provide a complete platform export or reliable model attribution for every historical prompt.
