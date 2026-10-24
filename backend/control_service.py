@@ -14,7 +14,6 @@ from sklearn.pipeline import Pipeline
 from sqlmodel import Field, Session, SQLModel, select
 
 from forecaster import (
-    FORECAST_MINUTES,
     HISTORY_MINUTES,
     MODEL_NAME,
     predict_next_minutes,
@@ -30,7 +29,8 @@ from models import (
 
 READING_UNITS = {"DO": "%", "pH": "-", "temp": "degC", "feed_rate": "mL/h"}
 PROCESS_TIME_STEP_H = 1 / 60
-ACTUATOR_LAG_MINUTES = 5.0
+ACTUATOR_LAG_MINUTES = 5
+CONTROLLER_FORECAST_HORIZON_MINUTES = ACTUATOR_LAG_MINUTES
 ACTUATOR_TIME_CONSTANT_MINUTES = 5.0
 DO_FEED_GAIN = 2.0
 DATA_DIRECTORY = Path(__file__).resolve().parent.parent / "data_kit"
@@ -374,7 +374,7 @@ def maybe_issue_controller_command(
             Prediction.run_id == state.run_id,
             Prediction.run_instance_id == state.run_instance_id,
             Prediction.made_at_time_h == state.process_time_h,
-            Prediction.horizon_minutes == FORECAST_MINUTES,
+            Prediction.horizon_minutes == CONTROLLER_FORECAST_HORIZON_MINUTES,
         )
         .order_by(Prediction.id.desc())
     ).first()

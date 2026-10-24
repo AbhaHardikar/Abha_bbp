@@ -82,10 +82,13 @@
           <div class="panel-heading">
             <div>
               <h2>Equipment timeline</h2>
-              <p>Click an operation to review or edit it. End dates are exclusive.</p>
+              <p>Click an operation to edit it, or drag it to another date or equipment lane. End dates are exclusive.</p>
             </div>
             <div id="batch-legend" class="batch-legend" aria-label="Batch legend"></div>
           </div>
+          <p id="drag-status" class="drag-status" role="status" aria-live="polite">
+            Drag a non-completed operation to preview a move; release to save it.
+          </p>
           <div id="gantt" class="gantt-scroll" aria-live="polite">
             <div class="loading">Loading schedule…</div>
           </div>
@@ -220,6 +223,7 @@
               </label>
               <button class="button button-secondary" type="submit">Save control settings</button>
               <p class="field-note">Saved settings enable the simulated controller. Demo values are not validated process guidance.</p>
+              <p class="field-note">The controller uses the fresh 5-minute DO forecast to match the 5-minute actuator lag. Missing or stale forecasts produce no command; pending commands and minimum dwell prevent repeated changes, and feed proposals are clamped to the configured limits.</p>
             </form>
           </section>
         </div>

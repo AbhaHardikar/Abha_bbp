@@ -7,14 +7,14 @@ from sqlalchemy import inspect, text
 from fastapi.testclient import TestClient
 from sqlmodel import SQLModel, Session, select
 
-from control_service import simulation_tick
+from control_service import maybe_issue_controller_command, simulation_tick
 from main import (
     create_app,
     initialize_control_state,
     make_engine,
     migrate_replay_instance_columns,
 )
-from models import ControlCommand, ControlConfig, SimulatorState
+from models import ControlCommand, ControlConfig, Prediction, SimulatorState
 
 TEST_WRITE_TOKEN = "test-write-access-token-for-unit-tests-0001"
 
@@ -850,6 +850,93 @@ class ScheduleApiTests(unittest.TestCase):
         self.assertEqual(controller_commands[0]["status"], "pending")
         self.assertGreaterEqual(controller_commands[0]["value"], 0)
         self.assertLessEqual(controller_commands[0]["value"], 30)
+
+    def test_controller_uses_fresh_forecast_at_actuator_lag_horizon(self):
+        with Session(self.app.state.engine) as session:
+            state = session.get(SimulatorState, 1)
+            state.run_id = "run_A"
+            state.run_instance_id = "controller-horizon-test"
+            state.status = "running"
+            state.process_time_h = 12.0
+            state.current_feed_rate = 10.0
+            config = session.get(ControlConfig, 1)
+            config.do_target_percent = 50.0
+            config.dwell_minutes = 10.0
+            session.add_all(
+                [
+                    Prediction(
+                        run_id="run_A",
+                        run_instance_id=state.run_instance_id,
+                        made_at_time_h=12.0,
+                        target_time_h=12.0 + 5 / 60,
+                        horizon_minutes=5,
+                        value=40.0,
+                        model_name="test",
+                    ),
+                    Prediction(
+                        run_id="run_A",
+                        run_instance_id=state.run_instance_id,
+                        made_at_time_h=12.0,
+                        target_time_h=12.0 + 10 / 60,
+                        horizon_minutes=10,
+                        value=80.0,
+                        model_name="test",
+                    ),
+                ]
+            )
+            session.commit()
+
+            command = maybe_issue_controller_command(
+                session,
+                state,
+                self.app.state.feed_limits,
+            )
+
+            self.assertIsNotNone(command)
+            self.assertAlmostEqual(command.value, 5.0)
+            self.assertAlmostEqual(command.apply_at_time_h, 12.0 + 5 / 60)
+
+    def test_controller_does_not_act_on_missing_or_stale_forecasts(self):
+        with Session(self.app.state.engine) as session:
+            state = session.get(SimulatorState, 1)
+            state.run_id = "run_A"
+            state.run_instance_id = "stale-forecast-test"
+            state.status = "running"
+            state.process_time_h = 12.0
+            state.current_feed_rate = 10.0
+            config = session.get(ControlConfig, 1)
+            config.do_target_percent = 50.0
+            config.dwell_minutes = 10.0
+            session.commit()
+
+            self.assertIsNone(
+                maybe_issue_controller_command(
+                    session,
+                    state,
+                    self.app.state.feed_limits,
+                )
+            )
+
+            session.add(
+                Prediction(
+                    run_id="run_A",
+                    run_instance_id=state.run_instance_id,
+                    made_at_time_h=12.0 - 1 / 60,
+                    target_time_h=12.0 + 4 / 60,
+                    horizon_minutes=5,
+                    value=40.0,
+                    model_name="test",
+                )
+            )
+            session.commit()
+
+            self.assertIsNone(
+                maybe_issue_controller_command(
+                    session,
+                    state,
+                    self.app.state.feed_limits,
+                )
+            )
 
     def test_manual_commands_obey_configured_dwell_time(self):
         self.client.put(

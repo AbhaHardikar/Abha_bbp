@@ -3,7 +3,6 @@
 ## Tools and model
 
 - AI tool: Copilot SDK in VS Code.
-- Model identifier: not exposed in this session’s metadata; it is intentionally not guessed.
 - Other tools used: local workspace file and shell tools, the integrated browser for local UI checks, and local Git commands. No external model API was used.
 
 ## User prompts, verbatim and in order
@@ -308,6 +307,15 @@ Your objective is to ensure the application is complete, reliable, reproducible,
 additive_migration
 ```
 
+### 21. Optional extensions E2 and E3
+
+````text
+implement e2 fully and also implement- E3. Drag to reschedule
+On the Gantt grid, drag a unit operation to another day or another equipment lane. Save through your
+update endpoint and show the returned violations inline without a page reload. Describe how you keep
+the grid and the violation list consistent while a drag is in progress.
+````
+
 ## Changes made and issues caught
 
 - The scheduling backend saves operations and returns current rule violations; this was chosen after the user approved that behavior.
@@ -315,4 +323,6 @@ additive_migration
 - The first manual-command UI calculation could use a stale process time during accelerated replay. A browser check reproduced the failure; the UI now submits a relative delay and the backend anchors it to process time when received. A browser run showed the command move from pending to applied.
 - The controller was configured with 50% DO and a 10-process-minute dwell only after the user selected them as illustrative local-demo values. They are not scientifically validated process guidance and are not code defaults.
 - A final audit reproduced stale data when restarting a source run at an earlier process minute. After user approval, the implementation added replay-instance identifiers and a non-destructive additive database migration to isolate new replay readings, predictions and commands without deleting historical rows.
-- No deployment, paid service, hosted link, or recording has been created.
+- E2 uses a fresh prediction five minutes ahead, matching the actuator lag. Missing or stale forecasts cause no action; pending commands, dwell, configured feed limits, and the existing API validation remain in force.
+- E3 keeps the committed schedule and violations unchanged during the drag preview. After the update endpoint returns, the UI replaces the operation and its related violations in memory; failures discard the preview and retain the saved state.
+- The application is deployed on the Render and Neon Free tiers at https://boston-bioprocess-demo.onrender.com. No paid services were selected. No recording has been created.

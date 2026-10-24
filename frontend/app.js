@@ -8,11 +8,15 @@ const operationColors = {
 };
 const writeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const writeTokenStorageKey = "bbpWriteToken";
+const ganttDayWidth = 78;
+const dragThresholdPixels = 5;
 
 const state = {
   schedule: null,
   violationsByOperation: new Map(),
   writeToken: sessionStorage.getItem(writeTokenStorageKey) || "",
+  drag: null,
+  savingOperationId: null,
 };
 
 const elements = {
@@ -25,6 +29,7 @@ const elements = {
   batchCount: document.querySelector("#batch-count"),
   operationCount: document.querySelector("#operation-count"),
   violationCount: document.querySelector("#violation-count"),
+  dragStatus: document.querySelector("#drag-status"),
   dialog: document.querySelector("#operation-dialog"),
   form: document.querySelector("#operation-form"),
   dialogError: document.querySelector("#dialog-error"),
@@ -167,7 +172,7 @@ function renderGantt(schedule) {
   const start = elements.start.value;
   const end = elements.end.value;
   const dayCount = daysBetween(start, end);
-  const dayWidth = 78;
+  const dayWidth = ganttDayWidth;
   const timelineWidth = dayCount * dayWidth;
   const grid = makeElement("div", "gantt-grid");
   grid.style.width = `${150 + timelineWidth}px`;
@@ -196,6 +201,7 @@ function renderGantt(schedule) {
     const name = makeElement("div", "equipment-name");
     name.append(makeElement("span", "", equipment.name));
     const lane = makeElement("div", "lane");
+    lane.dataset.equipmentId = String(equipment.id);
     lane.style.width = `${timelineWidth}px`;
     lane.style.backgroundSize = `${dayWidth}px 100%`;
 
@@ -225,7 +231,15 @@ function renderGantt(schedule) {
         makeElement("strong", "", operation.name),
         makeElement("span", "", `${operation.type} · ${displayDate(operation.start_date)} – ${displayDate(operation.end_date)}`),
       );
-      block.addEventListener("click", () => openOperation(operation));
+      block.addEventListener("pointerdown", (event) => beginOperationDrag(event, operation, block));
+      block.addEventListener("click", (event) => {
+        if (block.dataset.suppressClick === "true") {
+          delete block.dataset.suppressClick;
+          event.preventDefault();
+          return;
+        }
+        openOperation(operation);
+      });
       lane.append(block);
     }
 
@@ -267,6 +281,172 @@ function renderGantt(schedule) {
   grid.append(body);
   elements.gantt.replaceChildren(grid);
 }
+
+function setScheduleControlsDisabled(disabled) {
+  elements.start.disabled = disabled;
+  elements.end.disabled = disabled;
+  document.querySelector("#refresh-schedule").disabled = disabled;
+}
+
+function beginOperationDrag(event, operation, block) {
+  if (
+    event.button !== 0
+    || operation.status === "completed"
+    || state.savingOperationId !== null
+  ) {
+    return;
+  }
+  state.drag = {
+    pointerId: event.pointerId,
+    operation,
+    sourceBlock: block,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    preview: null,
+    startDate: operation.start_date,
+    equipmentId: operation.equipment_id,
+    didMove: false,
+  };
+}
+
+function laneAtPoint(clientX, clientY) {
+  const target = document.elementFromPoint(clientX, clientY);
+  const lane = target?.closest(".lane");
+  return lane ? Number(lane.dataset.equipmentId) : null;
+}
+
+function ensureDragPreview(drag) {
+  if (drag.preview) return drag.preview;
+  const preview = makeElement("div", "operation-block operation-preview");
+  preview.setAttribute("aria-hidden", "true");
+  preview.append(
+    makeElement("strong", "", drag.operation.name),
+    makeElement("span", "", ""),
+  );
+  drag.preview = preview;
+  return preview;
+}
+
+function moveOperationPreview(event) {
+  const drag = state.drag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+
+  const deltaX = event.clientX - drag.startClientX;
+  const deltaY = event.clientY - drag.startClientY;
+  if (!drag.didMove && Math.hypot(deltaX, deltaY) < dragThresholdPixels) return;
+
+  const operation = drag.operation;
+  const dayCount = daysBetween(elements.start.value, elements.end.value);
+  const duration = daysBetween(operation.start_date, operation.end_date);
+  const initialOffset = daysBetween(elements.start.value, operation.start_date);
+  const requestedOffset = initialOffset + Math.round(deltaX / ganttDayWidth);
+  const latestStartOffset = Math.max(0, dayCount - duration);
+  const startOffset = Math.min(Math.max(0, requestedOffset), latestStartOffset);
+  const nextStartDate = addDays(elements.start.value, startOffset);
+  const nextEquipmentId =
+    laneAtPoint(event.clientX, event.clientY) ?? drag.equipmentId;
+  if (
+    nextStartDate === operation.start_date
+    && nextEquipmentId === operation.equipment_id
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  drag.didMove = true;
+  const preview = ensureDragPreview(drag);
+  const targetLane = elements.gantt.querySelector(
+    `.lane[data-equipment-id="${nextEquipmentId}"]`,
+  );
+  if (!targetLane) return;
+
+  targetLane.append(preview);
+  preview.style.left = `${startOffset * ganttDayWidth + 3}px`;
+  preview.style.width = `${Math.max(48, duration * ganttDayWidth - 6)}px`;
+  preview.querySelector("span").textContent =
+    `${operation.type} · ${displayDate(nextStartDate)} – ${displayDate(addDays(nextStartDate, duration))}`;
+  drag.startDate = nextStartDate;
+  drag.equipmentId = nextEquipmentId;
+  drag.sourceBlock.classList.add("is-dragging");
+  setScheduleControlsDisabled(true);
+  elements.dragStatus.textContent =
+    "Unsaved preview. The saved schedule and violation list stay unchanged until the backend accepts the move.";
+}
+
+function applyOperationSaveResult(result) {
+  const operationId = result.operation.id;
+  state.schedule.unit_operations = state.schedule.unit_operations.map((operation) =>
+    operation.id === operationId ? result.operation : operation,
+  );
+  state.schedule.violations = [
+    ...state.schedule.violations.filter(
+      (violation) => !violation.operation_ids.includes(operationId),
+    ),
+    ...result.violations,
+  ];
+  renderSchedule();
+}
+
+async function finishOperationDrag(event) {
+  const drag = state.drag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  state.drag = null;
+
+  if (!drag.didMove) return;
+  drag.sourceBlock.dataset.suppressClick = "true";
+  state.savingOperationId = drag.operation.id;
+  elements.dragStatus.textContent = "Saving move and checking scheduling rules…";
+  try {
+    const result = await request(`/api/unit_operations/${drag.operation.id}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        start_date: drag.startDate,
+        end_date: addDays(
+          drag.startDate,
+          daysBetween(drag.operation.start_date, drag.operation.end_date),
+        ),
+        equipment_id: drag.equipmentId,
+      }),
+    });
+    applyOperationSaveResult(result);
+    if (result.violations.length > 0) {
+      elements.error.textContent = result.violations
+        .map((violation) => violation.message)
+        .join(" ");
+      elements.error.hidden = false;
+      elements.dragStatus.textContent =
+        `Move saved with ${result.violations.length} scheduling violation${result.violations.length === 1 ? "" : "s"}.`;
+    } else {
+      elements.error.hidden = true;
+      elements.dragStatus.textContent = `${drag.operation.name} moved and saved without violations.`;
+    }
+  } catch (error) {
+    renderSchedule();
+    elements.error.textContent = `Move was not saved: ${error.message}`;
+    elements.error.hidden = false;
+    elements.dragStatus.textContent =
+      "Move was not saved; the grid and violations show the last saved schedule.";
+  } finally {
+    state.savingOperationId = null;
+    setScheduleControlsDisabled(false);
+  }
+}
+
+function cancelOperationDrag(event) {
+  if (!state.drag || state.drag.pointerId !== event.pointerId) return;
+  const hadPreview = state.drag.didMove;
+  state.drag = null;
+  if (hadPreview) {
+    renderSchedule();
+    elements.dragStatus.textContent =
+      "Move cancelled; the grid and violation list still show the saved schedule.";
+    setScheduleControlsDisabled(false);
+  }
+}
+
+document.addEventListener("pointermove", moveOperationPreview);
+document.addEventListener("pointerup", finishOperationDrag);
+document.addEventListener("pointercancel", cancelOperationDrag);
 
 function openOperation(operation) {
   document.querySelector("#operation-id").value = String(operation.id);
