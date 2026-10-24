@@ -132,9 +132,10 @@ Monitoring should cover reading freshness and unit validity, prediction error by
 ## Known limitations and submission status
 
 - The free hosted demo is live at <https://boston-bioprocess-demo.onrender.com>; free-tier availability and quotas are not guaranteed.
-- **Demo video:** Not recorded.
-- **Automatic control:** Uses the current 5-minute forecast and configured minimum dwell; demo settings are illustrative and not validated for real process use.
+- Demo video: https://drive.google.com/file/d/1yWZyRkJZOE8nG9wZoikPDWxi4bpmH0jv/view?usp=drive_link
+- Automatic control: Uses the current 5-minute forecast and configured minimum dwell; demo settings are illustrative and not validated for real process use.
 - The ML metrics are based on overlapping windows from a single held-out run and do not establish biological generalization.
 - The current simulator supports one vessel and uses an assumed simplified response model.
 
 The assignment brief is included at `data_kit/Take_Home_SWE_ML_Brief.pdf`.
+the key - 'Klpcqu9Ga1PZdgQe6vaf9wDVejKk7v7jrpXDCUFf1Et68KXDj-gxraMApdY0laVE'
