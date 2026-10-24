@@ -38,6 +38,7 @@ class UnitOperationDependency(SQLModel, table=True):
 class Reading(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     run_id: str = Field(index=True)
+    run_instance_id: str | None = None
     time_h: float = Field(index=True)
     signal_name: str
     value: float
@@ -48,6 +49,7 @@ class Reading(SQLModel, table=True):
 class Prediction(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     run_id: str = Field(index=True)
+    run_instance_id: str | None = None
     made_at_time_h: float
     target_time_h: float = Field(index=True)
     horizon_minutes: int
@@ -59,6 +61,7 @@ class Prediction(SQLModel, table=True):
 class ControlCommand(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     run_id: str | None = Field(default=None, index=True)
+    run_instance_id: str | None = None
     setpoint_name: str
     value: float
     unit: str
@@ -74,6 +77,7 @@ class ControlCommand(SQLModel, table=True):
 class SimulatorState(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     run_id: str | None = None
+    run_instance_id: str | None = None
     next_index: int = 0
     process_time_h: float = 0.0
     process_minutes_per_second: float = 1.0

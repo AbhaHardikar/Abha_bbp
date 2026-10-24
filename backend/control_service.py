@@ -150,16 +150,24 @@ def load_simulation_runs(data_directory: Path = DATA_DIRECTORY) -> dict[str, Loa
 def _latest_complete_window(
     session: Session,
     run_id: str,
+    run_instance_id: str | None,
 ) -> tuple[list[float], list[float], float] | None:
     latest_time = session.exec(
-        select(func.max(Reading.time_h)).where(Reading.run_id == run_id)
+        select(func.max(Reading.time_h)).where(
+            Reading.run_id == run_id,
+            Reading.run_instance_id == run_instance_id,
+        )
     ).one()
     if latest_time is None:
         return None
     earliest_time = latest_time - (HISTORY_MINUTES - 1) / 60 - 0.0001
     readings = session.exec(
         select(Reading)
-        .where(Reading.run_id == run_id, Reading.time_h >= earliest_time)
+        .where(
+            Reading.run_id == run_id,
+            Reading.run_instance_id == run_instance_id,
+            Reading.time_h >= earliest_time,
+        )
         .order_by(Reading.time_h, Reading.id)
     ).all()
     values_by_time: dict[float, dict[str, float]] = {}
@@ -190,8 +198,9 @@ def create_forecast(
     session: Session,
     run_id: str,
     model: Pipeline,
+    run_instance_id: str | None = None,
 ) -> list[Prediction]:
-    history = _latest_complete_window(session, run_id)
+    history = _latest_complete_window(session, run_id, run_instance_id)
     if history is None:
         return []
     do_history, feed_history, made_at_time_h = history
@@ -199,6 +208,7 @@ def create_forecast(
     predictions = [
         Prediction(
             run_id=run_id,
+            run_instance_id=run_instance_id,
             made_at_time_h=made_at_time_h,
             target_time_h=made_at_time_h + horizon / 60,
             horizon_minutes=horizon,
@@ -217,6 +227,7 @@ def store_readings(
     readings: list[ReadingInput],
     run_id: str,
     model: Pipeline,
+    run_instance_id: str | None = None,
 ) -> list[Prediction]:
     reading_keys: set[tuple[float, str]] = set()
     for reading in readings:
@@ -244,6 +255,7 @@ def store_readings(
         [
             Reading(
                 run_id=run_id,
+                run_instance_id=run_instance_id,
                 time_h=reading.time_h,
                 signal_name=reading.signal_name,
                 value=reading.value,
@@ -253,7 +265,7 @@ def store_readings(
         ]
     )
     session.commit()
-    return create_forecast(session, run_id, model)
+    return create_forecast(session, run_id, model, run_instance_id)
 
 
 def submit_command(
@@ -267,6 +279,7 @@ def submit_command(
     feed_limits = limits["feed_rate"]
     process_time = state.process_time_h if state else 0.0
     run_id = state.run_id if state else None
+    run_instance_id = state.run_instance_id if state else None
     reason = None
 
     if payload.setpoint_name != "feed_rate":
@@ -298,6 +311,7 @@ def submit_command(
             select(ControlCommand).where(
                 ControlCommand.setpoint_name == payload.setpoint_name,
                 ControlCommand.status == "pending",
+                ControlCommand.run_instance_id == run_instance_id,
             )
         ).first()
         if pending is not None:
@@ -307,6 +321,7 @@ def submit_command(
                 select(ControlCommand)
                 .where(
                     ControlCommand.run_id == run_id,
+                    ControlCommand.run_instance_id == run_instance_id,
                     ControlCommand.setpoint_name == payload.setpoint_name,
                     ControlCommand.status.in_(("pending", "applied")),
                 )
@@ -323,6 +338,7 @@ def submit_command(
 
     command = ControlCommand(
         run_id=run_id,
+        run_instance_id=run_instance_id,
         setpoint_name=payload.setpoint_name,
         value=payload.value,
         unit=payload.unit,
@@ -356,6 +372,7 @@ def maybe_issue_controller_command(
         select(Prediction)
         .where(
             Prediction.run_id == state.run_id,
+            Prediction.run_instance_id == state.run_instance_id,
             Prediction.made_at_time_h == state.process_time_h,
             Prediction.horizon_minutes == FORECAST_MINUTES,
         )
@@ -368,6 +385,7 @@ def maybe_issue_controller_command(
         select(ControlCommand).where(
             ControlCommand.setpoint_name == "feed_rate",
             ControlCommand.status == "pending",
+            ControlCommand.run_instance_id == state.run_instance_id,
         )
     ).first()
     if pending is not None:
@@ -376,6 +394,7 @@ def maybe_issue_controller_command(
         select(ControlCommand)
         .where(
             ControlCommand.run_id == state.run_id,
+            ControlCommand.run_instance_id == state.run_instance_id,
             ControlCommand.setpoint_name == "feed_rate",
             ControlCommand.status.in_(("pending", "applied")),
         )
@@ -449,6 +468,7 @@ def simulation_tick(
             select(ControlCommand)
             .where(
                 ControlCommand.run_id == state.run_id,
+                ControlCommand.run_instance_id == state.run_instance_id,
                 ControlCommand.setpoint_name == "feed_rate",
                 ControlCommand.status == "pending",
                 ControlCommand.apply_at_time_h <= process_time,
@@ -471,6 +491,7 @@ def simulation_tick(
             [
                 Reading(
                     run_id=state.run_id,
+                    run_instance_id=state.run_instance_id,
                     time_h=process_time,
                     signal_name=signal_name,
                     value=value,
@@ -484,7 +505,7 @@ def simulation_tick(
         state.wall_time = datetime.now(timezone.utc)
         session.add(state)
         session.commit()
-        create_forecast(session, state.run_id, model)
+        create_forecast(session, state.run_id, model, state.run_instance_id)
         refreshed_state = session.get(SimulatorState, 1)
         if refreshed_state is not None:
             maybe_issue_controller_command(session, refreshed_state, limits)

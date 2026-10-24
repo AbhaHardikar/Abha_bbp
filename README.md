@@ -1,9 +1,16 @@
 # Boston Bioprocess
 
-This project is a local proof of concept for batch scheduling and simulated bioreactor control. I built the browser interface with plain HTML, CSS, and JavaScript and serve it from the FastAPI backend. The backend stores schedules, readings, forecasts, simulator state, and commands in SQLite.
+This project is a proof of concept for batch scheduling and simulated bioreactor control. I built the browser interface with plain HTML, CSS, and JavaScript and serve it from the FastAPI backend. The backend stores schedules, readings, forecasts, simulator state, and commands with SQLModel. It uses SQLite locally and can use PostgreSQL through `DATABASE_URL` when hosted.
 
-**Hosted application:** Not deployed. I have not found and verified a setup that keeps the full application at $0.  
-**Demo video:** Not recorded.
+**Hosted URL:** Not deployed.
+
+## Architecture
+
+- `backend/main.py` defines the FastAPI routes, database lifecycle, schedule validation, and static-file serving.
+- `backend/models.py` contains the SQLModel persistence types for schedules and control data.
+- `backend/control_service.py` validates run data and commands and implements ingestion and simulated actuator behavior.
+- `backend/forecaster.py` loads the supplied runs, trains/selects/evaluates the model, and produces inference outputs.
+- `frontend/` contains the same-origin static interface, which fetches schedule and control state from the API.
 
 ## Run the application
 
@@ -47,9 +54,9 @@ The initial schedule includes five equipment lanes, three batches, and six opera
 
 The sample schedule is seeded only when the equipment table is empty.
 
-## Forecasting
+## How I split and evaluated the forecaster
 
-I trained a multi-output Ridge regression model to forecast DO for the next ten one-minute steps from the previous 60 minutes of DO and feed-rate readings. The scaler is fit on training data only. I split by run rather than randomly by time window to reduce leakage between highly overlapping windows.
+I used the three supplied CSV runs as provided; I did not synthesize training data. Each run contains 2,400 process minutes with DO, pH, temperature, and feed-rate values. I trained a multi-output Ridge regression model to forecast DO for the next ten one-minute steps from the previous 60 minutes of DO and feed-rate readings. The scaler is fit on training data only. I split by run rather than randomly by time window to reduce leakage between highly overlapping windows.
 
 | Run | Use | Windows |
 |---|---|---:|
@@ -70,25 +77,45 @@ The metrics endpoint also reports errors by forecast horizon. These results are 
 
 The control room replays one of the supplied fermentation runs and displays readings, DO forecasts, and command status. Replay starts paused; the default speed is one process-minute per second. Before a manual command is applied, feed rate follows the selected run.
 
+Each replay has its own instance identifier while retaining the source dataset's `run_id`. This keeps a replay restarted at an earlier process minute from mixing its live readings and forecasts with history from an earlier replay. Startup adds the new nullable instance columns to existing databases without deleting existing rows.
+
 The simulator records DO, pH, temperature, and feed rate. Once it has 60 consecutive one-minute DO/feed observations, it creates ten one-minute DO predictions. Each prediction records when it was made and its target process time.
 
 I implemented the actuator behavior described in the assignment: commands have a five-process-minute delay, feed changes at the scheduled time, and DO responds with a five-minute first-order lag toward `-2.0 * (feed_rate - feed_run)`. DO is kept within `[0, 100]`; feed bounds and units are loaded from `data_kit/limits.json`. Rejected commands are retained with their reasons. The UI labels observations, forecasts, pending commands, and applied commands separately.
 
 The `/command` API accepts an absolute apply time. The manual control form uses `/api/control/commands` and sends a delay instead; the backend anchors that delay to the latest persisted process time. This avoids stale client timestamps during fast replay.
 
-The automatic controller is implemented but **not configured or active by default**. I have not chosen a DO target or dwell time, so the controller does not send automatic commands unless an operator supplies those settings. I did not want to assume a process target that was not provided.
+For the local simulator demonstration, I configured a **50% DO target** and a **10-process-minute minimum dwell**. The target is an illustrative demo choice informed by the supplied runs, not a scientifically validated operating target. The dwell is set to the ten-minute forecast horizon to avoid issuing a new command on every replay tick. The controller and its simplified feed/DO response have not been validated for a real bioprocess; these settings must not be treated as process guidance. The settings are saved only in the local SQLite database, which is ignored by Git. A fresh local SQLite database starts without controller settings. A fresh PostgreSQL database is initialized with these illustrative settings, but existing settings are never overwritten during startup.
 
-## Implementation decisions
+## Decisions and trade-offs
 
 - I save schedule violations and return them to the UI instead of rejecting the operation, so conflicts remain visible and editable.
 - I used SQLite and a static frontend to keep local setup simple and avoid an extra frontend build toolchain.
 - I used a run-level train/validation/test split because adjacent time windows overlap.
 - Manual commands follow the same five-minute delay rule as controller commands.
 
-## Not completed
+## Hosting preparation (not deployed)
 
-- **Hosting:** The app has not been deployed. I will only consider hosting after verifying it can be kept at $0; I have not enabled billing or published the supplied data.
+I have prepared the application to use PostgreSQL from the `DATABASE_URL` environment variable while retaining SQLite as the local default. The hosted database URL should be stored as a secret, not committed. PostgreSQL connections use the `psycopg` driver and connection health checks. Startup creates missing tables, applies the additive replay-isolation migration, seeds the schedule only when the equipment table is empty, and creates the illustrative control settings only when no configuration row exists. Startup does not import or overwrite the local SQLite database.
+
+The proposed no-cost demonstration configuration is a Render Free Web Service connected to the private repository, with the repository root as the service root, build command `pip install -r backend/requirements.txt`, start command `uvicorn main:app --app-dir backend --host 0.0.0.0 --port $PORT`, and Python `3.12.9`. A Neon Free PostgreSQL database is intended for persistent state; `DATABASE_URL` must contain its pooled connection URL. The application has not been deployed, no provider account or database has been created, and the hosted URL is not yet available.
+
+Free hosting is suitable only for a short demonstration, not a production availability guarantee. Render may spin the web service down after 15 minutes without inbound traffic; waking it takes about a minute. Its 750 free instance-hours per workspace per month are shared with other free services, and quota exhaustion can suspend the service or prevent new builds. Neon Free includes 100 CU-hours and 1 GB of database storage per project, plus 5 GB of public network transfer; compute can scale to zero after five minutes. Staying on the free plans without adding payment details avoids intentional paid-resource selection, but these quotas can make the demo unavailable when exceeded. The simulator does not run while the web service is asleep and must be started again after a service restart. The public API currently has no authentication, so anyone who can reach the deployed URL could modify the demo schedule or simulator configuration. The hosted app needs the repository's supplied `data_kit` files for model training and simulation; the repository should remain private, and the app should not expose the raw CSV files as static assets.
+
+On Render, set `WRITE_API_TOKEN` as a secret environment variable to a high-entropy value of at least 32 ASCII characters. The server requires it when running on Render and rejects every `POST`, `PUT`, `PATCH`, or `DELETE` request without a matching Bearer token; public `GET` routes remain readable. The page has an “Unlock demo edits” control for the evaluator. The key is entered at runtime, kept in the current browser tab's session storage, and sent only with write requests; it is not included in the frontend source. The evaluator must receive the key through a private channel separate from the public URL and repository. The shared key grants write access to whoever possesses it and does not identify individual users. Local SQLite development remains writable without a key.
+
+## Retraining and monitoring
+
+I would retrain from versioned input data using the same run-level split strategy, select settings on validation data only, and compare each candidate with the persistence baseline before evaluating it once on a held-out run. I would retain the model version, input-data identifiers, and evaluation metrics for each candidate.
+
+Monitoring should cover reading freshness and unit validity, prediction error by horizon, run-to-run drift, feed bounds, command rejection reasons, pending-to-applied delay, simulator health, and API/database errors. Any move from this simulated controller to real equipment would require process-owner review, validated control limits, and appropriate safety engineering; this proof of concept is not validated for equipment use.
+
+## Known limitations and submission status
+
+- The app has not been deployed; there is no hosted URL. No hosted database has been created, no payment details have been entered, and the supplied data have not been published.
 - **Demo video:** Not recorded.
-- **Automatic control settings:** Waiting for a DO target and dwell time.
+- **Automatic control:** Configured for the local demo (50% DO target, 10-process-minute dwell) and as the initial hosted demo configuration; not validated for real process use.
+- The ML metrics are based on overlapping windows from a single held-out run and do not establish biological generalization.
+- The current simulator supports one vessel and uses an assumed simplified response model.
 
-The assignment brief is available locally at `data_kit/Take_Home_SWE_ML_Brief.pdf` and is not included in the repository.
+The assignment brief is included at `data_kit/Take_Home_SWE_ML_Brief.pdf`.

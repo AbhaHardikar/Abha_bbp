@@ -22,6 +22,26 @@
     </header>
 
     <main>
+      <details class="write-access">
+        <summary>Unlock demo edits</summary>
+        <form id="write-access-form" class="write-access-form">
+          <label for="write-access-key">Evaluator write key</label>
+          <input
+            id="write-access-key"
+            type="password"
+            autocomplete="off"
+            aria-describedby="write-access-status"
+          />
+          <button class="button button-primary" type="submit">Unlock writes</button>
+          <button id="lock-demo-edits" class="button button-secondary" type="button">
+            Lock
+          </button>
+          <span id="write-access-status" role="status" aria-live="polite">
+            Viewing is public. A write key is only needed to make changes.
+          </span>
+        </form>
+      </details>
+
       <section id="schedule-page" class="page">
         <div class="page-heading">
           <div>
@@ -199,7 +219,7 @@
                 <input id="controller-dwell" type="number" min="0.1" step="0.1" required />
               </label>
               <button class="button button-secondary" type="submit">Save control settings</button>
-              <p class="field-note">No target or dwell is preselected. The controller stays inactive until configured.</p>
+              <p class="field-note">Saved settings enable the simulated controller. Demo values are not validated process guidance.</p>
             </form>
           </section>
         </div>

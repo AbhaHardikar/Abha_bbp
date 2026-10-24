@@ -4,3 +4,4 @@ sqlmodel>=0.0.22,<1
 pandas>=2.2,<4
 scikit-learn>=1.5,<2
 joblib>=1.4,<2
+psycopg[binary]>=3.2,<4

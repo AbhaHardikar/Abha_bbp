@@ -108,6 +108,44 @@ main {
   padding: 36px 40px 64px;
 }
 
+.write-access {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-bottom: 20px;
+  padding: 12px 16px;
+}
+
+.write-access summary {
+  color: var(--blue);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.write-access-form {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.write-access-form label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.write-access-form input {
+  max-width: 280px;
+}
+
+.write-access-form [role="status"] {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .page-heading {
   align-items: flex-end;
   display: flex;

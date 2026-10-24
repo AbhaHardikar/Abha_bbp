@@ -6,10 +6,13 @@ const operationColors = {
   Spray: "#e1a451",
   Sum: "#8493a4",
 };
+const writeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const writeTokenStorageKey = "bbpWriteToken";
 
 const state = {
   schedule: null,
   violationsByOperation: new Map(),
+  writeToken: sessionStorage.getItem(writeTokenStorageKey) || "",
 };
 
 const elements = {
@@ -61,15 +64,25 @@ function displayDate(value) {
 }
 
 async function request(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  const headers = {
+    "Content-Type": "application/json",
+    ...options.headers,
+  };
+  if (writeMethods.has(method) && state.writeToken) {
+    headers.Authorization = `Bearer ${state.writeToken}`;
+  }
   const response = await fetch(path, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
+    headers,
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401 && writeMethods.has(method)) {
+      throw new Error(
+        "Write access key required or invalid. Close any modal, unlock demo edits above, and retry.",
+      );
+    }
     const detail = body.detail;
     throw new Error(typeof detail === "string" ? detail : `Request failed (${response.status})`);
   }
@@ -685,6 +698,37 @@ document.querySelector("#simulator-resume").addEventListener("click", () => {
 });
 document.querySelector("#manual-command-form").addEventListener("submit", saveManualCommand);
 document.querySelector("#controller-config-form").addEventListener("submit", saveControllerConfig);
+
+const writeAccessForm = document.querySelector("#write-access-form");
+const writeAccessKey = document.querySelector("#write-access-key");
+const writeAccessStatus = document.querySelector("#write-access-status");
+
+if (state.writeToken) {
+  writeAccessStatus.textContent =
+    "A write key is stored for this tab; the server checks it when you make a change.";
+}
+
+writeAccessForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const token = writeAccessKey.value.trim();
+  if (!token) {
+    writeAccessStatus.textContent = "Enter the evaluator write key to unlock changes.";
+    return;
+  }
+  state.writeToken = token;
+  sessionStorage.setItem(writeTokenStorageKey, token);
+  writeAccessKey.value = "";
+  writeAccessStatus.textContent =
+    "Write key saved for this tab; the server checks it when you make a change.";
+});
+
+document.querySelector("#lock-demo-edits").addEventListener("click", () => {
+  state.writeToken = "";
+  sessionStorage.removeItem(writeTokenStorageKey);
+  writeAccessKey.value = "";
+  writeAccessStatus.textContent =
+    "Viewing is public. A write key is only needed to make changes.";
+});
 
 for (const tab of document.querySelectorAll(".nav-tab")) {
   tab.addEventListener("click", () => {

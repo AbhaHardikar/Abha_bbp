@@ -1,14 +1,17 @@
 import asyncio
 import math
+import os
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
+from hmac import compare_digest
 from pathlib import Path
 from typing import Iterator
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import event
+from sqlalchemy import event, inspect, text
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
@@ -42,11 +45,13 @@ from models import (
 )
 
 DATABASE_PATH = Path(__file__).resolve().parent / "bioprocess.db"
-DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
+DATABASE_URL = os.environ.get("DATABASE_URL") or f"sqlite:///{DATABASE_PATH}"
+WRITE_API_TOKEN = os.environ.get("WRITE_API_TOKEN") or None
 FRONTEND_PATH = Path(__file__).resolve().parent.parent / "frontend"
 DATA_DIRECTORY = Path(__file__).resolve().parent.parent / "data_kit"
 EQUIPMENT_NAMES = ("1.5L", "15L", "20L", "75L", "1500L")
 OPERATION_ORDER = ("Seed", "Bioreactor", "TFF", "Spray", "Sum")
+WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 class OperationCreate(SQLModel):
@@ -129,8 +134,15 @@ class CommandResponse(SQLModel):
 
 
 def make_engine(database_url: str) -> Engine:
+    if database_url.startswith("postgres://"):
+        database_url = "postgresql+psycopg://" + database_url.removeprefix("postgres://")
+    elif database_url.startswith("postgresql://"):
+        database_url = "postgresql+psycopg://" + database_url.removeprefix("postgresql://")
+
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
     engine_options = {"connect_args": connect_args}
+    if database_url.startswith("postgresql+psycopg://"):
+        engine_options.update(pool_pre_ping=True, pool_recycle=300)
     if database_url in ("sqlite://", "sqlite:///:memory:"):
         engine_options["poolclass"] = StaticPool
     engine = create_engine(database_url, **engine_options)
@@ -217,18 +229,58 @@ def seed_database(engine: Engine) -> None:
         session.commit()
 
 
-def initialize_control_state(engine: Engine) -> None:
+def initialize_control_state(
+    engine: Engine,
+    seed_demo_control_defaults: bool = False,
+) -> None:
     with Session(engine) as session:
         simulator = session.get(SimulatorState, 1)
         if simulator is None:
             session.add(SimulatorState())
-        elif simulator.status == "running":
-            simulator.status = "paused"
-            simulator.wall_time = datetime.now(timezone.utc)
-            session.add(simulator)
+        else:
+            if simulator.status == "running":
+                simulator.status = "paused"
+                simulator.wall_time = datetime.now(timezone.utc)
+                session.add(simulator)
+            if (
+                simulator.run_id is not None
+                and simulator.run_instance_id is None
+                and simulator.status in {"running", "paused"}
+            ):
+                simulator.run_instance_id = uuid4().hex
+                simulator.wall_time = datetime.now(timezone.utc)
+                session.add(simulator)
+                pending_commands = session.exec(
+                    select(ControlCommand).where(
+                        ControlCommand.run_id == simulator.run_id,
+                        ControlCommand.run_instance_id.is_(None),
+                        ControlCommand.status == "pending",
+                    )
+                ).all()
+                for command in pending_commands:
+                    command.run_instance_id = simulator.run_instance_id
+                    session.add(command)
         if session.get(ControlConfig, 1) is None:
-            session.add(ControlConfig())
+            session.add(
+                ControlConfig(
+                    do_target_percent=50.0 if seed_demo_control_defaults else None,
+                    dwell_minutes=10.0 if seed_demo_control_defaults else None,
+                )
+            )
         session.commit()
+
+
+def migrate_replay_instance_columns(engine: Engine) -> None:
+    for table_name in ("reading", "prediction", "controlcommand", "simulatorstate"):
+        columns = {
+            column["name"]
+            for column in inspect(engine).get_columns(table_name)
+        }
+        if "run_instance_id" not in columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(f"ALTER TABLE {table_name} ADD COLUMN run_instance_id VARCHAR")
+                )
 
 
 def command_response(command: ControlCommand, accepted: bool) -> CommandResponse:
@@ -245,20 +297,33 @@ def control_state_payload(session: Session, limits: dict) -> dict:
     simulator = session.get(SimulatorState, 1)
     config = session.get(ControlConfig, 1)
     run_id = simulator.run_id if simulator and simulator.run_id else "external"
+    run_instance_id = simulator.run_instance_id if simulator else None
     readings = session.exec(
         select(Reading)
-        .where(Reading.run_id == run_id)
+        .where(
+            Reading.run_id == run_id,
+            Reading.run_instance_id == run_instance_id,
+        )
         .order_by(Reading.time_h.desc(), Reading.id.desc())
         .limit(480)
     ).all()
     predictions = session.exec(
         select(Prediction)
-        .where(Prediction.run_id == run_id)
+        .where(
+            Prediction.run_id == run_id,
+            Prediction.run_instance_id == run_instance_id,
+        )
         .order_by(Prediction.id.desc())
         .limit(10)
     ).all()
+    command_query = select(ControlCommand)
+    if simulator and simulator.run_id and run_instance_id:
+        command_query = command_query.where(
+            ControlCommand.run_id == run_id,
+            ControlCommand.run_instance_id == run_instance_id,
+        )
     commands = session.exec(
-        select(ControlCommand).order_by(ControlCommand.id.desc()).limit(50)
+        command_query.order_by(ControlCommand.id.desc()).limit(50)
     ).all()
     return {
         "simulator": (
@@ -445,17 +510,52 @@ def find_violations(
     return violations
 
 
-def create_app(database_url: str = DATABASE_URL) -> FastAPI:
+def create_app(
+    database_url: str = DATABASE_URL,
+    write_api_token: str | None = WRITE_API_TOKEN,
+) -> FastAPI:
+    write_api_token = write_api_token or None
+    hosted = os.environ.get("RENDER", "").lower() == "true"
+    if hosted and write_api_token is None:
+        raise RuntimeError("WRITE_API_TOKEN must be configured on hosted deployments")
+    if write_api_token is not None and (
+        len(write_api_token) < 32 or not write_api_token.isascii()
+    ):
+        raise ValueError("WRITE_API_TOKEN must contain at least 32 ASCII characters")
+
     engine = make_engine(database_url)
     app = FastAPI(title="Boston Bioprocess API")
     app.state.engine = engine
     app.state.simulator_task = None
 
+    @app.middleware("http")
+    async def authorize_write_requests(request: Request, call_next):
+        if request.method in WRITE_METHODS and write_api_token is not None:
+            authorization = request.headers.get("authorization", "")
+            scheme, separator, supplied_token = authorization.partition(" ")
+            if (
+                not separator
+                or scheme.lower() != "bearer"
+                or not compare_digest(
+                    supplied_token.encode("utf-8"),
+                    write_api_token.encode("utf-8"),
+                )
+            ):
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "A valid write access key is required."},
+                )
+        return await call_next(request)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         SQLModel.metadata.create_all(engine)
+        migrate_replay_instance_columns(engine)
         seed_database(engine)
-        initialize_control_state(engine)
+        initialize_control_state(
+            engine,
+            seed_demo_control_defaults=engine.dialect.name == "postgresql",
+        )
         app.state.feed_limits = load_limits()
         app.state.runs = load_simulation_runs(DATA_DIRECTORY)
         app.state.forecaster, app.state.forecaster_metrics = train_forecaster(DATA_DIRECTORY)
@@ -767,6 +867,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
             payload.readings,
             run_id,
             app.state.forecaster,
+            simulator.run_instance_id if simulator and simulator.status == "running" else None,
         )
         return {
             "stored_readings": len(payload.readings),
@@ -883,6 +984,7 @@ def create_app(database_url: str = DATABASE_URL) -> FastAPI:
 
         sample = app.state.runs[payload.run_id].samples[payload.start_minute]
         state.run_id = payload.run_id
+        state.run_instance_id = uuid4().hex
         state.next_index = payload.start_minute
         state.process_time_h = sample["time_h"]
         state.process_minutes_per_second = payload.process_minutes_per_second
