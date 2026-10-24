@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Boston Bioprocess | Operations</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <a class="brand" href="/" aria-label="Boston Bioprocess home">
+        <span class="brand-mark" aria-hidden="true">B</span>
+        <span>Boston Bioprocess</span>
+      </a>
+      <nav class="primary-nav" aria-label="Main navigation">
+        <button class="nav-tab active" type="button" data-page="schedule">Schedule</button>
+        <button class="nav-tab" type="button" data-page="control">Control room</button>
+      </nav>
+      <span class="connection-status"><span class="status-dot"></span> API connected</span>
+    </header>
+
+    <main>
+      <details class="write-access">
+        <summary>Unlock demo edits</summary>
+        <form id="write-access-form" class="write-access-form">
+          <label for="write-access-key">Evaluator write key</label>
+          <input
+            id="write-access-key"
+            type="password"
+            autocomplete="off"
+            aria-describedby="write-access-status"
+          />
+          <button class="button button-primary" type="submit">Unlock writes</button>
+          <button id="lock-demo-edits" class="button button-secondary" type="button">
+            Lock
+          </button>
+          <span id="write-access-status" role="status" aria-live="polite">
+            Viewing is public. A write key is only needed to make changes.
+          </span>
+        </form>
+      </details>
+
+      <section id="schedule-page" class="page">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">PRODUCTION PLANNING</p>
+            <h1>Schedule</h1>
+            <p class="subtitle">Plan batch operations across shared equipment.</p>
+          </div>
+          <div class="date-controls">
+            <label>
+              <span>From</span>
+              <input id="schedule-start" type="date" value="2026-10-20" />
+            </label>
+            <label>
+              <span>To (exclusive)</span>
+              <input id="schedule-end" type="date" value="2026-11-10" />
+            </label>
+            <button id="refresh-schedule" class="button button-primary" type="button">Apply</button>
+          </div>
+        </div>
+
+        <section class="summary-cards" aria-label="Schedule overview">
+          <article class="summary-card">
+            <span class="summary-label">Batches</span>
+            <strong id="batch-count">—</strong>
+          </article>
+          <article class="summary-card">
+            <span class="summary-label">Unit operations</span>
+            <strong id="operation-count">—</strong>
+          </article>
+          <article class="summary-card warning-summary">
+            <span class="summary-label">Schedule violations</span>
+            <strong id="violation-count">—</strong>
+          </article>
+        </section>
+
+        <section id="schedule-error" class="error-banner" role="alert" hidden></section>
+        <section class="panel schedule-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Equipment timeline</h2>
+              <p>Click an operation to edit it, or drag it to another date or equipment lane. End dates are exclusive.</p>
+            </div>
+            <div id="batch-legend" class="batch-legend" aria-label="Batch legend"></div>
+          </div>
+          <p id="drag-status" class="drag-status" role="status" aria-live="polite">
+            Drag a non-completed operation to preview a move; release to save it.
+          </p>
+          <div id="gantt" class="gantt-scroll" aria-live="polite">
+            <div class="loading">Loading schedule…</div>
+          </div>
+        </section>
+
+        <section class="panel violations-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Rule violations</h2>
+              <p>Violations are saved and returned by the scheduling API.</p>
+            </div>
+          </div>
+          <ul id="violations-list" class="violations-list"></ul>
+        </section>
+      </section>
+
+      <section id="control-page" class="page" hidden>
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">BIOREACTOR</p>
+            <h1>Control room</h1>
+            <p class="subtitle">Replay a fermentation run, inspect forecasts, and send feed setpoints.</p>
+          </div>
+        </div>
+        <section class="panel simulator-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Device simulator</h2>
+              <p>One process-minute per second at the default replay speed.</p>
+            </div>
+            <span id="simulator-status" class="simulator-status">Stopped</span>
+          </div>
+          <div class="simulator-controls">
+            <label>
+              Fermentation run
+              <select id="simulator-run">
+                <option value="run_A">Run A</option>
+                <option value="run_B">Run B</option>
+                <option value="run_C">Run C</option>
+              </select>
+            </label>
+            <label>
+              Start minute
+              <input id="simulator-start-minute" type="number" min="0" max="2399" value="0" />
+            </label>
+            <label>
+              Process minutes / second
+              <input id="simulator-speed" type="number" min="0.01" max="60" step="0.1" value="1" />
+            </label>
+            <div class="simulator-actions">
+              <button id="simulator-start" class="button button-primary" type="button">Start run</button>
+              <button id="simulator-pause" class="button button-secondary" type="button">Pause</button>
+              <button id="simulator-resume" class="button button-secondary" type="button">Resume</button>
+            </div>
+          </div>
+          <p id="control-error" class="error-banner inline-error" role="alert" hidden></p>
+        </section>
+
+        <section class="control-metrics" aria-label="Current process values">
+          <article class="summary-card">
+            <span class="summary-label">Dissolved oxygen</span>
+            <strong id="latest-do">—</strong>
+          </article>
+          <article class="summary-card">
+            <span class="summary-label">Feed rate</span>
+            <strong id="latest-feed">—</strong>
+          </article>
+          <article class="summary-card">
+            <span class="summary-label">Process time</span>
+            <strong id="latest-process-time">—</strong>
+          </article>
+        </section>
+
+        <section class="panel chart-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Live process traces</h2>
+              <p>Readings, the latest ten-minute forecast, and command apply times.</p>
+            </div>
+            <div class="chart-legend">
+              <span><i class="legend-line do-line"></i>DO</span>
+              <span><i class="legend-line feed-line"></i>Feed</span>
+              <span><i class="legend-line forecast-line"></i>Forecast</span>
+              <span><i class="legend-command pending-command"></i>Pending</span>
+              <span><i class="legend-command applied-command"></i>Applied</span>
+              <span><i class="legend-command rejected-command"></i>Rejected</span>
+            </div>
+          </div>
+          <div id="control-chart" class="control-chart" aria-live="polite">
+            <p class="loading">Start the simulator to see process data.</p>
+          </div>
+        </section>
+
+        <div class="control-bottom-grid">
+          <section class="panel manual-command-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Manual feed command</h2>
+                <p id="feed-limits-label">Setpoint limits are loaded from limits.json.</p>
+                <p>The requested delay is anchored to process time when the command is received.</p>
+              </div>
+            </div>
+            <form id="manual-command-form" class="control-form">
+              <label>
+                Feed setpoint (mL/h)
+                <input id="manual-feed-value" type="number" min="0" max="30" step="0.1" required />
+              </label>
+              <label>
+                Apply after process-minutes
+                <input id="manual-apply-delay" type="number" min="5" step="1" value="5" required />
+              </label>
+              <button class="button button-primary" type="submit">Send setpoint</button>
+              <p id="manual-command-result" class="command-result" role="status" hidden></p>
+            </form>
+          </section>
+
+          <section class="panel controller-panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Automatic controller</h2>
+                <p id="controller-status">Control target and dwell settings are not configured.</p>
+              </div>
+            </div>
+            <form id="controller-config-form" class="control-form">
+              <label>
+                DO target (%)
+                <input id="controller-target" type="number" min="0" max="100" step="0.1" required />
+              </label>
+              <label>
+                Minimum dwell (process-minutes)
+                <input id="controller-dwell" type="number" min="0.1" step="0.1" required />
+              </label>
+              <button class="button button-secondary" type="submit">Save control settings</button>
+              <p class="field-note">Saved settings enable the simulated controller. Demo values are not validated process guidance.</p>
+              <p class="field-note">The controller uses the fresh 5-minute DO forecast to match the 5-minute actuator lag. Missing or stale forecasts produce no command; pending commands and minimum dwell prevent repeated changes, and feed proposals are clamped to the configured limits.</p>
+            </form>
+          </section>
+        </div>
+
+        <section class="panel commands-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Command history</h2>
+              <p>Rejected commands are retained with their validation reason.</p>
+            </div>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Process time</th>
+                  <th>Setpoint</th>
+                  <th>Apply at</th>
+                  <th>Source</th>
+                  <th>Status</th>
+                  <th>Reason</th>
+                </tr>
+              </thead>
+              <tbody id="command-history">
+                <tr><td colspan="6" class="empty-cell">No commands yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="operation-dialog" class="operation-dialog">
+      <form id="operation-form" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">UNIT OPERATION</p>
+            <h2 id="dialog-title">Edit operation</h2>
+          </div>
+          <button class="icon-button" type="button" id="close-dialog" aria-label="Close">×</button>
+        </div>
+        <p id="dialog-batch" class="dialog-batch"></p>
+        <input id="operation-id" type="hidden" />
+        <label>
+          Start date
+          <input id="operation-start" name="start_date" type="date" required />
+        </label>
+        <label>
+          End date <span class="field-note">(exclusive)</span>
+          <input id="operation-end" name="end_date" type="date" required />
+        </label>
+        <label>
+          Equipment
+          <select id="operation-equipment" name="equipment_id" required></select>
+        </label>
+        <label>
+          Status
+          <select id="operation-status" name="status" required>
+            <option value="draft">Draft</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="completed">Completed</option>
+          </select>
+        </label>
+        <p id="dialog-error" class="dialog-error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button class="button button-secondary" type="button" id="cancel-dialog">Cancel</button>
+          <button class="button button-primary" type="submit" id="save-operation">Save changes</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
