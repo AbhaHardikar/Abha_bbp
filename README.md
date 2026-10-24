@@ -23,7 +23,13 @@ python3.12 -m venv .venv
 .venv/bin/uvicorn main:app --reload
 ```
 
-Then open <http://127.0.0.1:8000>. On first start, the application creates `backend/bioprocess.db` and adds sample equipment, batches, and operations. The database is local and ignored by Git.
+Then open <http://127.0.0.1:8000>. On first start, the application creates `backend/bioprocess.db` and adds sample equipment, batches, and operations if the schedule is empty. The database is local and ignored by Git. To use a temporary in-memory database instead, run:
+
+```bash
+DATABASE_URL=sqlite:// .venv/bin/uvicorn main:app --reload
+```
+
+The in-memory database resets when the server stops and does not modify `backend/bioprocess.db`.
 
 To run the tests:
 
@@ -107,7 +113,7 @@ Example from the supplied **Run B** using the trained forecaster and 50% demo ta
 - Manual commands follow the same five-minute delay rule as controller commands.
 - For E3, a drag is only a preview until the existing update API accepts it; returned violations replace the moved operation's old violation entries in the current UI state.
 
-## Hosting
+## How I would deploy, retrain and monitor this
 
 I have prepared the application to use PostgreSQL from the `DATABASE_URL` environment variable while retaining SQLite as the local default. The hosted database URL should be stored as a secret, not committed. PostgreSQL connections use the `psycopg` driver and connection health checks. Startup creates missing tables, applies the additive replay-isolation migration, seeds the schedule only when the equipment table is empty, and creates the illustrative control settings only when no configuration row exists. Startup does not import or overwrite the local SQLite database.
 
@@ -115,9 +121,9 @@ The live demo uses a Render Free Web Service and a Neon Free PostgreSQL database
 
 This is a demonstration setup, not a production availability guarantee. The Render Free service can spin down after inactivity, causing a cold-start delay; the Neon Free database has usage quotas. The simulator is in-process, so it pauses while Render sleeps and must be started again after service restarts. The hosted API allows public reads but requires the evaluator write key for changes. Keep that key private and out of source control. The repository remains private; the app needs the supplied `data_kit` files for training and simulation but does not serve the raw CSVs as static assets.
 
-On Render, set `WRITE_API_TOKEN` as a secret environment variable to a high-entropy value of at least 32 ASCII characters. The server requires it when running on Render and rejects every `POST`, `PUT`, `PATCH`, or `DELETE` request without a matching Bearer token; public `GET` routes remain readable. The page has an “Unlock demo edits” control for the evaluator. The key is entered at runtime, kept in the current browser tab's session storage, and sent only with write requests; it is not included in the frontend source. The evaluator must receive the key through a private channel separate from the public URL and repository. The shared key grants write access to whoever possesses it and does not identify individual users. Local SQLite development remains writable without a key.
+On Render, set `WRITE_API_TOKEN` as a secret environment variable to a high-entropy value of at least 32 ASCII characters. The server requires it when running on Render and rejects every `POST`, `PUT`, `PATCH`, or `DELETE` request without a valid `Authorization: Bearer` header; public `GET` routes remain readable. The page has an “Unlock demo edits” control for the evaluator. The key is entered at runtime, kept in the current browser tab's session storage, and sent only with write requests; it is not included in the frontend source. The evaluator must receive the key through a private channel separate from the public URL and repository. The shared key grants write access to whoever possesses it and does not identify individual users. Local SQLite development remains writable without a key.
 
-## Retraining and monitoring
+**Retraining and monitoring**
 
 I would retrain from versioned input data using the same run-level split strategy, select settings on validation data only, and compare each candidate with the persistence baseline before evaluating it once on a held-out run. I would retain the model version, input-data identifiers, and evaluation metrics for each candidate.
 
